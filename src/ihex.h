@@ -98,6 +98,14 @@ void ihex_write_word(ihex_data *ih, uint16_t word);
 void ihex_write_data(ihex_data *ih, const void *data, int size);
 
 /**
+ * Writes the same byte multiple times to a stream in Intel hex format.
+ * @param ih Intel hex writer state.
+ * @param valueu Byte to fill with.
+ * @param size Number of bytes to write.
+ */
+void ihex_write_fill(ihex_data *ih, uint8_t value, int size);
+
+/**
  * Gets the starting output address of the current block
  * @param ih Intel hex writer state to read from.
  * @return Starting address of the current block.

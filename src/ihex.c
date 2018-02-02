@@ -98,6 +98,12 @@ void ihex_write_data(ihex_data *ih, const void *data, int size) {
     }
 }
 
+void ihex_write_fill(ihex_data *ih, uint8_t value, int size) {
+    for (int i = 0; i < size; i++) {
+        ihex_write_byte(ih, value);
+    }
+}
+
 void ihex_set_addr(ihex_data *ih, uint16_t addr) {
     ihex_finish_block(ih);
     ih->addr = addr;

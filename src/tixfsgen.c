@@ -61,11 +61,6 @@ typedef struct {
 } tixfs_dir_entry;
 
 typedef struct {
-    uint16_t inode;
-    tix_far_ptr loc;
-} tixfs_inode_entry;
-
-typedef struct {
     FILE *stream;
     ihex_data ih_writer;
 
@@ -74,14 +69,15 @@ typedef struct {
 
     int inode_cur;
     int inode_cap;
-    tixfs_inode_entry *inodes;
+    tix_far_ptr *inodes;
 } tixfs_data;
 
 
 int tixfs_data_init(tixfs_data *fs, const char *file);
 void tixfs_finalize(tixfs_data *fs);
 
-void tixfs_write_inode(tixfs_data *fs, const tixfs_inode *inode);
+void tixfs_write_inode(tixfs_data *fs,
+        uint16_t inode_num, const tixfs_inode *inode);
 void tixfs_write_file(tixfs_data *fs, uint16_t inode_num,
         const tixfs_inode *inode, const void *data);
 
@@ -108,7 +104,7 @@ int tixfs_data_init(tixfs_data *fs, const char *file) {
 
     fs->inode_cur = 1;
     fs->inode_cap = 16;
-    fs->inodes = malloc(fs->inode_cap * sizeof(tixfs_inode_entry));
+    fs->inodes = malloc(fs->inode_cap * sizeof(tix_far_ptr));
     if (!fs->inodes) {
         perror("Memory error");
         exit(EXIT_FAILURE);
@@ -139,16 +135,46 @@ void tixfs_finalize(tixfs_data *fs) {
     /* Write like a normal file with inode number 0. The data does not include
      * the first element (the inode file). */
 
-    tixfs_write_inode(fs, &if_inode);
+    tixfs_write_inode(fs, 0, &if_inode);
 
-    for (int i = 1; i <= fs->inode_cur; i++) {
-        ihex_write_word(&fs->ih_writer, fs->inodes[i].inode);
-        ihex_write_byte(&fs->ih_writer, fs->inodes[i].loc.page);
-        ihex_write_word(&fs->ih_writer, fs->inodes[i].loc.addr);
+    for (int inode = 1; inode < fs->inode_cur; inode++) {
+        ihex_write_word(&fs->ih_writer, inode);
+        ihex_write_byte(&fs->ih_writer, fs->inodes[inode].page);
+        ihex_write_word(&fs->ih_writer, fs->inodes[inode].addr);
+    }
+
+    fs->tail.addr += if_inode.size;
+
+    /* Fill the rest of the current page with 0xFF */
+    ihex_write_fill(&fs->ih_writer, 0xFF,
+            TIXFS_REL_ADDR + TIXFS_PAGE_SIZE - fs->tail.addr);
+
+    /* Fill the rest of the current block with 0xFF */
+    for (int p = fs->tail.page+1; p % 4 > 0; p++) {
+        ihex_set_page(&fs->ih_writer, p, TIXFS_REL_ADDR);
+        ihex_write_fill(&fs->ih_writer, 0xFF, TIXFS_PAGE_SIZE);
     }
 
     /* TODO Write the anchor data */
+    /* Head of the filesystem = start of first page */
+    ihex_set_page(&fs->ih_writer, TIXFS_ANCHOR_START_PAGE, TIXFS_REL_ADDR);
+    ihex_write_byte(&fs->ih_writer, TIXFS_START_PAGE);
+    ihex_write_word(&fs->ih_writer, TIXFS_REL_ADDR);
+    /* Fill the rest of the page with 0xFF */
+    ihex_write_fill(&fs->ih_writer, 0xFF, TIXFS_PAGE_SIZE - 3);
 
+    /* Fill middle pages with 0xFF */
+    ihex_set_page(&fs->ih_writer, TIXFS_ANCHOR_START_PAGE + 1, TIXFS_REL_ADDR);
+    ihex_write_fill(&fs->ih_writer, 0xFF, TIXFS_PAGE_SIZE);
+    ihex_set_page(&fs->ih_writer, TIXFS_ANCHOR_START_PAGE + 2, TIXFS_REL_ADDR);
+    ihex_write_fill(&fs->ih_writer, 0xFF, TIXFS_PAGE_SIZE);
+
+    /* Fill last page with 0xFF and the inode file location */
+    ihex_set_page(&fs->ih_writer, TIXFS_ANCHOR_START_PAGE + 3, TIXFS_REL_ADDR);
+    ihex_write_fill(&fs->ih_writer, 0xFF, TIXFS_PAGE_SIZE - 4);
+    /* Inode file location was stored in the inode array */
+    ihex_write_byte(&fs->ih_writer, fs->inodes[0].page);
+    ihex_write_word(&fs->ih_writer, fs->inodes[0].addr);
 
     /* Free data */
 
@@ -157,20 +183,16 @@ void tixfs_finalize(tixfs_data *fs) {
     free(fs->inodes);
 }
 
-void tixfs_write_inode(tixfs_data *fs, const tixfs_inode *inode) {
+void tixfs_write_inode(tixfs_data *fs,
+        uint16_t inode_num, const tixfs_inode *inode) {
+    uint16_t remaining = TIXFS_REL_ADDR + TIXFS_PAGE_SIZE - fs->tail.addr;
+
     /* Adjust the offset and fill with 1s ($FF) if the file would extend past a
      * page boundary
      */
-    if (fs->tail.addr + sizeof(tixfs_inode) + inode->size
-            > TIXFS_REL_ADDR + TIXFS_PAGE_SIZE) {
-        /* TODO Find a better way to do this (ftruncate wasn't working properly)
-         * This is only done when writing in raw format.
-         */
-        /*
-       for (int i = fs->tail.addr; i < TIXFS_REL_ADDR + TIXFS_PAGE_SIZE; i++) {
-       fputc(0xFF, fs->stream);
-       }
-       */
+    if (remaining < TIXFS_SIZEOF_INODE + inode->size) {
+        /* Fill with 0xFF to the end of the page */
+        ihex_write_fill(&fs->ih_writer, 0xFF, remaining);
 
         fs->tail.addr = TIXFS_REL_ADDR;
         fs->tail.page++;
@@ -192,6 +214,9 @@ void tixfs_write_inode(tixfs_data *fs, const tixfs_inode *inode) {
     ihex_write_byte(&fs->ih_writer, inode->gid);
     ihex_write_byte(&fs->ih_writer, inode->nlinks);
 
+    /* Store the addresses relocated to memory bank A */
+    fs->inodes[inode_num] = fs->tail;
+
     fs->tail.addr += TIXFS_SIZEOF_INODE;
 }
 
@@ -207,11 +232,7 @@ void tixfs_write_file(tixfs_data *fs,
     }
 
     /* Moves to the next page if necessary */
-    tixfs_write_inode(fs, inode);
-
-    /* Store the addresses relocated to memory bank A */
-    fs->inodes[inode_num].inode = inode_num;
-    fs->inodes[inode_num].loc = fs->tail;
+    tixfs_write_inode(fs, inode_num, inode);
 
     /* Write the data */
     ihex_write_data(&fs->ih_writer, data, inode->size);
@@ -223,9 +244,10 @@ void tixfs_write_file(tixfs_data *fs,
  * Recursively adds files to the filesystem, writing them to the output file.
  */
 uint16_t tixfs_add_file(tixfs_data *fs, const char *path) {
+    FILE *file_stream;
     DIR *dir;
     struct dirent *dentry;
-    struct stat dirstat;
+    struct stat file_stat;
 
     tixfs_inode t_inode;
 
@@ -253,7 +275,7 @@ uint16_t tixfs_add_file(tixfs_data *fs, const char *path) {
 
     inode_num = fs->inode_cur++;
 
-    if (stat(path, &dirstat) < 0) {
+    if (stat(path, &file_stat) < 0) {
         return 0;
     }
 
@@ -261,42 +283,53 @@ uint16_t tixfs_add_file(tixfs_data *fs, const char *path) {
      * Since the size of the values is likely larger on this system than in
      * TIX, they are truncated to single-byte.
      */
-    t_inode.uid = dirstat.st_uid;
-    t_inode.gid = dirstat.st_gid;
+    t_inode.uid = file_stat.st_uid;
+    t_inode.gid = file_stat.st_gid;
 
     /* TODO Verify that all files linking to this file are in the sub-directory,
      * because otherwise an inode could never be freed within TIX
      */
-    t_inode.nlinks = dirstat.st_nlink;
+    t_inode.nlinks = file_stat.st_nlink;
 
-    t_inode.mode = dirstat.st_mode & 07777; /* Permission bits */
+    t_inode.mode = file_stat.st_mode & 07777; /* Permission bits */
 
-    if (S_ISREG(dirstat.st_mode)) {
+    if (S_ISREG(file_stat.st_mode)) {
         t_inode.mode |= TIX_S_ISREG;
 
         /* For regular files, write the inode and data right now */
 
-        if (dirstat.st_size > TIXFS_FILE_SIZE_MAX) {
+        if (file_stat.st_size > TIXFS_FILE_SIZE_MAX) {
             fprintf(stderr,
                     "Warning: Size of file \"%s\" is larger than the maximum "
                     "file size (%ld). The file will be truncated.\n",
                     path, TIXFS_FILE_SIZE_MAX);
         }
-        t_inode.size = dirstat.st_size;
+        t_inode.size = file_stat.st_size;
+
+        file_stream = fopen(path, "r");
+        if (!file_stream) {
+            fprintf(stderr,
+                    "Warning: File \"%s\" cannot be opened for reading. "
+                    "Skipping.\n",
+                    path);
+            return 0;
+        }
 
         /* Read the file into a buffer first */
         buf = malloc(t_inode.size);
         if (!buf) {
+            fclose(file_stream);
             perror("Memory error");
             exit(EXIT_FAILURE);
         }
 
-        fread(buf, 1, t_inode.size, fs->stream);
+        fread(buf, 1, t_inode.size, file_stream);
         tixfs_write_file(fs, inode_num, &t_inode, buf);
 
+        fclose(file_stream);
         free(buf);
 
-    } else if (S_ISDIR(dirstat.st_mode)) {
+    } else if (S_ISDIR(file_stat.st_mode)) {
         t_inode.mode |= TIX_S_ISDIR;
 
         /* Hard links are not supported for directories, but there is always a
