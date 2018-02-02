@@ -12,6 +12,9 @@
 #include <string.h>
 #include <sys/stat.h>
 
+/* TODO Make this less linux-specific */
+#include <sys/sysmacros.h>
+
 #include "ihex.h"
 
 #define TIXFS_ANCHOR_START_PAGE 0x04
@@ -29,8 +32,10 @@
 #define TIXFS_NAME_MAX 14
 
 /* Only these filetypes are supported for now */
-#define TIX_S_ISREG 0xC000
-#define TIX_S_ISDIR 0xD000
+#define TIX_S_IFREG 0xC000
+#define TIX_S_IFDIR 0xD000
+#define TIX_S_IFCHR 0xA000
+#define TIX_S_IFBLK 0x9000
 
 #define TIX_S_INDFIL 0xF000
 
@@ -294,7 +299,7 @@ uint16_t tixfs_add_file(tixfs_data *fs, const char *path) {
     t_inode.mode = file_stat.st_mode & 07777; /* Permission bits */
 
     if (S_ISREG(file_stat.st_mode)) {
-        t_inode.mode |= TIX_S_ISREG;
+        t_inode.mode |= TIX_S_IFREG;
 
         /* For regular files, write the inode and data right now */
 
@@ -330,7 +335,7 @@ uint16_t tixfs_add_file(tixfs_data *fs, const char *path) {
         free(buf);
 
     } else if (S_ISDIR(file_stat.st_mode)) {
-        t_inode.mode |= TIX_S_ISDIR;
+        t_inode.mode |= TIX_S_IFDIR;
 
         /* Hard links are not supported for directories, but there is always a
          * ".." entry in each directory
@@ -416,6 +421,23 @@ uint16_t tixfs_add_file(tixfs_data *fs, const char *path) {
 
         free(buf);
 
+    } else if (S_ISCHR(file_stat.st_mode) || S_ISBLK(file_stat.st_mode)) {
+        if (S_ISCHR(file_stat.st_mode)) {
+            t_inode.mode |= TIX_S_IFCHR;
+        } else {
+            t_inode.mode |= TIX_S_IFBLK;
+        }
+
+        /* Get the major and minor device IDs.
+         * TODO Find a less linux-specific way to do this
+         */
+        uint8_t dev_id[2];
+        dev_id[0] = major(file_stat.st_rdev);
+        dev_id[1] = minor(file_stat.st_rdev);
+
+        t_inode.size = 2;
+
+        tixfs_write_file(fs, inode_num, &t_inode, dev_id);
     } else {
         fprintf(stderr,
                 "Warning: Type of file \"%s\" is not supported. The file will "
