@@ -8,7 +8,7 @@ SRC = src
 BIN = bin
 BUILD = build
 
-SOURCES := $(addprefix $(SRC)/, tixfsgen.c ihex.c)
+SOURCES := $(addprefix $(SRC)/, tixfsgen.c ihex.c id_map.c)
 OBJECTS := $(SOURCES:$(SRC)/%.c=$(BUILD)/%.o)
 DEPS := $(SOURCES:$(SRC)/%.c=$(BUILD)/%.d)
 
