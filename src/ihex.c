@@ -2,7 +2,7 @@
  * @file ihex.c
  * @author Zach Peltzer
  * @date Created: Fri, 02 Feb 2018
- * @date Last Modified: Fri, 02 Feb 2018
+ * @date Last Modified: Thu, 22 Feb 2018
  */
 
 #include <stdint.h>

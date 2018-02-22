@@ -2,7 +2,7 @@
  * @file tixfsgen.c
  * @author Zach Peltzer
  * @date Created: Wed, 31 Jan 2018
- * @date Last Modified: Sat, 10 Feb 2018
+ * @date Last Modified: Thu, 22 Feb 2018
  */
 
 #include <dirent.h>
@@ -120,7 +120,7 @@ int tixfs_data_init(tixfs_data *fs, uint8_t start_page, uint8_t end_page,
 
     fs->inode_cur = 1;
     fs->inode_cap = 16;
-    fs->inodes = malloc(fs->inode_cap * sizeof(tix_far_ptr));
+    fs->inodes = malloc(fs->inode_cap * sizeof(fs->inodes[0]));
     if (!fs->inodes) {
         perror("Memory error");
         exit(EXIT_FAILURE);
@@ -171,7 +171,6 @@ void tixfs_finalize(tixfs_data *fs) {
         ihex_write_fill(&fs->ih_writer, 0xFF, TIXFS_PAGE_SIZE);
     }
 
-    /* TODO Write the anchor data */
     /* Head of the filesystem = start of first page */
     ihex_set_page(&fs->ih_writer, fs->start_page, TIXFS_REL_ADDR);
     ihex_write_byte(&fs->ih_writer, TIXFS_START_PAGE);
@@ -289,7 +288,7 @@ uint16_t tixfs_add_file(tixfs_data *fs,
      */
     if (fs->inode_cur >= fs->inode_cap) {
         fs->inode_cap *= 2;
-        fs->inodes = realloc(fs->inodes, fs->inode_cap);
+        fs->inodes = realloc(fs->inodes, fs->inode_cap * sizeof(fs->inodes[0]));
         if (!fs->inodes) {
             perror("Memory error");
             exit(EXIT_FAILURE);
@@ -451,6 +450,7 @@ uint16_t tixfs_add_file(tixfs_data *fs,
         tixfs_write_file(fs, inode_num, &t_inode, buf);
 
         free(buf);
+        closedir(dir);
 
     } else if (S_ISCHR(file_stat.st_mode) || S_ISBLK(file_stat.st_mode)) {
         if (S_ISCHR(file_stat.st_mode)) {
